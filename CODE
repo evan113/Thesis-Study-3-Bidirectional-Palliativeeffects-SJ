@@ -1,0 +1,369 @@
+---
+title: "STUDY 3 - BIDIRECTIONAL STUDY"
+author: "Anonymous"
+date: "2024-04-11"
+output: html_document
+---
+
+## Load packages
+```{r}
+library(tidyverse)
+library(httr)
+library(haven)
+library(readxl)
+library(ggplot2)
+library(ggpubr)
+library(PerformanceAnalytics)
+library(psych)
+library(lavaan)
+library(gt)
+library(gto)
+library(officer)
+library(semTools)
+library(broom)
+library(semPlot)
+library(semoutput) # devtools::install_github("dr-JT/semoutput")
+library(sjPlot)
+library(semPower)
+library(sjstats)
+library(semTable)
+library(apaTables)
+library(lme4)
+library(lmtest) ## likelihood ratio test for model comparisons based on the recommendations of 
+## Gonzales & Griffin (2001) because the LRT will always yield identical results across identical 
+## identifications regardless of sample size - it is also invariant to different methods of imposing
+## model constraints for model identification
+```
+
+## Load data
+```{r}
+# Set working directory for data
+FULLDATA <- read_excel("THESIS_STUDY3.xlsx")
+```
+
+## converting vars to numeric
+```{r}
+FULLDATA$Life_Sat_W1_1 <- as.numeric(FULLDATA$Life_Sat_W1_1)
+FULLDATA$Life_Sat_W1_2 <- as.numeric(FULLDATA$Life_Sat_W1_2)
+
+FULLDATA$Life_Sat_W2_1 <- as.numeric(FULLDATA$Life_Sat_W2_1)
+FULLDATA$Life_Sat_W2_2 <- as.numeric(FULLDATA$Life_Sat_W2_2)
+
+FULLDATA$Life_Sat_W3_1 <- as.numeric(FULLDATA$Life_Sat_W3_1)
+FULLDATA$Life_Sat_W3_2 <- as.numeric(FULLDATA$Life_Sat_W3_2)
+
+FULLDATA$Life_Sat_W4_1 <- as.numeric(FULLDATA$Life_Sat_W4_1)
+FULLDATA$Life_Sat_W4_2 <- as.numeric(FULLDATA$Life_Sat_W4_2)
+
+FULLDATA$Subjective_SES_W1 <- as.numeric(FULLDATA$Subjective_SES_W1)
+FULLDATA$Subjective_SES_W2 <- as.numeric(FULLDATA$Subjective_SES_W2)
+FULLDATA$Subjective_SES_W3 <- as.numeric(FULLDATA$Subjective_SES_W3)
+FULLDATA$Subjective_SES_W4 <- as.numeric(FULLDATA$Subjective_SES_W4)
+
+FULLDATA$Gender2 <- as.factor(FULLDATA$Gender2)
+```
+
+## Create life satisfaction scores per wave (W1 - W4)
+```{r}
+FULLDATA <- FULLDATA %>%
+      mutate(Life_Sat_W1 = rowMeans(select(., Life_Sat_W1_1, Life_Sat_W1_2), na.rm = T))
+
+FULLDATA <- FULLDATA %>%
+      mutate(Life_Sat_W2 = rowMeans(select(., Life_Sat_W2_1, Life_Sat_W2_2), na.rm = T))
+
+FULLDATA <- FULLDATA %>%
+      mutate(Life_Sat_W3 = rowMeans(select(., Life_Sat_W3_1, Life_Sat_W3_2), na.rm = T))
+
+FULLDATA <- FULLDATA %>%
+      mutate(Life_Sat_W4 = rowMeans(select(., Life_Sat_W4_1, Life_Sat_W4_2), na.rm = T))
+```
+
+## Descriptive stats (demos)
+```{r}
+summary(FULLDATA$Gender2)
+summary(FULLDATA$Age)
+summary(FULLDATA$Education)
+summary(FULLDATA$Political_Orientation_group_W1)
+```
+
+## Creating long form data
+```{r}
+FULLDATA_LONG <- subset(FULLDATA, select = c("ID", "Age", "Gender", "Life_Sat_W1", "Life_Sat_W2",
+                                             "Life_Sat_W3", "Life_Sat_W4", "Subjective_SES_W1",
+                                             "Subjective_SES_W2", "Subjective_SES_W3", "Subjective_SES_W4",
+                                             "SJ_W1", "SJ_W2", "SJ_W3", "SJ_W4"))
+
+# Reshape the entire dataset from wide to long format
+FULLDATA_LONG <- FULLDATA_LONG %>%
+  pivot_longer(cols = starts_with(c("Life_Sat", "Subjective_SES", "SJ")),
+               names_to = c(".value", "wave"),
+               names_pattern = "(.*)_(W\\d+)") %>%
+  select(ID, Age, Gender, wave, Life_Sat, Subjective_SES, SJ) %>%
+  arrange(ID, wave)
+```
+
+## converting variables to numeric
+```{r}
+FULLDATA_LONG$Gender <- as.numeric(FULLDATA_LONG$Gender)
+FULLDATA$Gender <- as.numeric(FULLDATA$Gender)
+
+```
+
+#########################################
+ CROSS LAGGED PANEL MODEL 
+#########################################
+
+```{r}
+# Specify the combined model with covariances
+combined_model <- '
+  # Model 1: Subjective_SES -> Life_Sat -> SJ
+    SJ_W2 ~ b*Life_Sat_W1 + c*Subjective_SES_W1 + SJ_W1
+    Life_Sat_W2 ~ a*Subjective_SES_W1 + Life_Sat_W1
+    direct1 := c
+    indirect1 := a*b
+    total1 := direct1 + indirect1
+    prop_mediated1 := indirect1/total1
+
+  # Model 2: SJ -> Life_Sat -> Subjective_SES
+    Subjective_SES_W4 ~ f*Life_Sat_W3 + g*SJ_W3 + Subjective_SES_W3 + Subjective_SES_W2 + Subjective_SES_W1
+    Life_Sat_W4 ~ d*SJ_W3 + Life_Sat_W3 + Life_Sat_W2 + Life_Sat_W1
+    direct2 := g
+    indirect2 := d*f
+    total2 := direct2 + indirect2
+    prop_mediated2 := indirect2/total2
+
+  # Covariances between variables
+  Life_Sat_W1 ~~ SJ_W1
+  Life_Sat_W2 ~~ SJ_W2
+  Life_Sat_W3 ~~ SJ_W3
+  Life_Sat_W4 ~~ SJ_W4
+  Subjective_SES_W1 ~~ Life_Sat_W1
+  Subjective_SES_W2 ~~ Life_Sat_W2
+  Subjective_SES_W3 ~~ Life_Sat_W3
+  Subjective_SES_W4 ~~ Life_Sat_W4
+  Subjective_SES_W1 ~~ SJ_W1
+  Subjective_SES_W2 ~~ SJ_W2
+  Subjective_SES_W3 ~~ SJ_W3
+  Subjective_SES_W4 ~~ SJ_W4
+  SJ_W2 ~~ SJ_W1
+  SJ_W2 ~~ SJ_W4
+  SJ_W4 ~~ SJ_W1
+  SJ_W2 ~~ SJ_W3
+  Subjective_SES_W2 ~~ Subjective_SES_W4
+  Subjective_SES_W3 ~~ Subjective_SES_W1
+  Subjective_SES_W3 ~~ Subjective_SES_W4
+  Subjective_SES_W2 ~~ Subjective_SES_W1
+  Subjective_SES_W2 ~~ Subjective_SES_W3
+  Subjective_SES_W4 ~~ Subjective_SES_W1
+  Life_Sat_W3 ~~ Life_Sat_W1
+  Life_Sat_W3 ~~ Life_Sat_W4
+  Life_Sat_W2 ~~ Life_Sat_W1
+  Life_Sat_W2 ~~ Life_Sat_W3
+  Life_Sat_W3 ~~ Subjective_SES_W2
+  Life_Sat_W1 ~~ Subjective_SES_W2 
+  Life_Sat_W1 ~~ Subjective_SES_W3
+ Subjective_SES_W1 ~~ Life_Sat_W3
+ Subjective_SES_W3  ~ Subjective_SES_W2
+ SJ_W3 ~ SJ_W2
+ SJ_W3 ~ SJ_W1
+ Life_Sat_W1 ~ Life_Sat_W2
+'
+
+# Estimate the combined model
+fit_combined <- sem(combined_model, data = FULLDATA, estimator = "ML", missing = "ML",
+                    meanstructure = T, int.ov.free = T)
+
+# Print the summary of the results
+summary(fit_combined, fit = T, standardized = T)
+
+inspect(fit_combined, "modindices")
+
+
+
+
+```
+#########################################
+RANDOM-INTERCEPT CROSS LAGGED PANEL MODEL 
+#########################################
+```{r}
+##Specify unconstrained model 
+mod1 <- '
+    # Create between components (random intercepts)
+SJ =~ 1*SJ_W1 + 1*SJ_W2 + 1*SJ_W3 + 1*SJ_W4
+LS =~ 1*Life_Sat_W1 + 1* Life_Sat_W2 + 1*Life_Sat_W3 + 1*Life_Sat_W4
+SSES =~ 1*Subjective_SES_W1 + 1*Subjective_SES_W2 + 1*Subjective_SES_W3 + 1*Subjective_SES_W4
+
+# Create within components
+wSJ1 =~ 1*SJ_W1
+wSJ2 =~ 1*SJ_W2
+wSJ3 =~ 1*SJ_W3
+wSJ4 =~ 1*SJ_W4
+wLS1 =~ 1*Life_Sat_W1
+wLS2 =~ 1*Life_Sat_W2
+wLS3 =~ 1*Life_Sat_W3
+wLS4 =~ 1*Life_Sat_W4
+wSSES1 =~ 1*Subjective_SES_W1
+wSSES2 =~ 1*Subjective_SES_W2
+wSSES3 =~ 1*Subjective_SES_W3
+wSSES4 =~ 1*Subjective_SES_W4
+
+# Estimate lagged effects between within-person-centered variables
+wSSES2 ~ wSSES1 + wLS1 + wSJ1
+wLS2 ~ wLS1 + wSSES1 + wSJ1
+wSJ2 ~ wSJ1 + wLS1 + wSSES1
+wSSES3 ~ wSSES2 + wLS2 + wSJ2
+wLS3 ~ wLS2 + wSSES2 + wSJ2
+wSJ3 ~ wSJ2 + wLS2 + wSSES2
+wSSES4 ~ wSSES3 + wLS3 + wSJ3
+wLS4 ~ wLS3 + wSSES3 + wSJ3
+wSJ4 ~ wSJ3 + wLS3 + wSSES3
+
+# Estimate lagged mediation effects between between-person variables
+LS ~ a*SSES
+SJ ~ b*LS
+SJ ~ c*SSES
+
+LS ~ d*SJ
+SSES ~ f*LS
+SSES ~ g*SJ
+
+# Indirect and total effects (between)
+direct1:= c
+indirect1:= a*b
+total1:= direct1 + indirect1
+prop_mediated1:= indirect1/direct1
+
+direct2:= g
+indirect2:= d*f
+total2:= direct2 + indirect2
+prop_mediated2:= indirect2/direct2
+
+# Estimate covariance between within-person variables at wave 1
+wSSES1 ~~ wSJ1
+wSSES1 ~~ wLS1
+wSJ1 ~~ wLS1
+
+# Estimate covariances between residuals of within-person-centered variables (waves 2 & 3)
+wSSES2 ~~ wSJ2
+wSSES2 ~~ wLS2
+wSJ2 ~~ wLS2
+wSSES3 ~~ wSJ3
+wSSES3 ~~ wLS3
+wSJ3 ~~ wLS3
+wSSES4 ~~ wSJ4
+wSSES4 ~~ wLS4
+wSJ4 ~~ wLS4
+
+ # Estimate (residual) variance of within-person centered variables
+wSSES1 ~~ wSSES1
+wSSES2 ~~ wSSES2
+wSSES3 ~~ wSSES3
+wSSES4 ~~ wSSES4
+wLS1 ~~ wLS1
+wLS2 ~~ wLS2
+wLS3 ~~ wLS3
+wLS4 ~~ wLS4
+wSJ1 ~~ wSJ1
+wSJ2 ~~ wSJ2
+wSJ3 ~~ wSJ3
+wSJ4 ~~ wSJ4
+
+# Estimate (residual) variance of random intercepts of endogenous variables
+SSES ~~ SSES
+LS ~~ LS
+SJ ~~ SJ
+'
+
+# Fit the model
+mod1.fit <- lavaan(mod1, data = FULLDATA,  
+                   estimator = "MLR", missing = "fiml", meanstructure = T, int.ov.free = T)
+
+# Summarize the results
+summary(mod1.fit, fit = T, standardized = T)
+
+
+```
+
+#################################
+ MULTILEVEL APPROACH
+#################################
+
+## Multilevel mediation (subjective SES -> LS -> SJ)
+```{r}
+FULLDATA_LONG$wave <- as.factor(FULLDATA_LONG$wave)
+library(mediation)
+## ICC = .74
+null_model <- lmer(SJ ~ 1 + (1|ID), data = FULLDATA_LONG, REML = F, control = lmerControl(optimizer = "bobyqa"))
+tab_model(null_model)
+
+Path_A <- lmer(Life_Sat ~ 1 + Subjective_SES + Gender + 
+                     Age + wave + (1 + Subjective_SES|ID), 
+               data = FULLDATA_LONG, REML = F, control = lmerControl(optimizer = "bobyqa"))
+tab_model(Path_A)
+
+Path_B <- lmer(SJ ~ 1 + Life_Sat + Gender + Age + wave+ (1|ID), data = FULLDATA_LONG, 
+               REML = F, control = lmerControl(optimizer = "bobyqa"))
+
+tab_model(Path_B)
+
+Path_C <- lmer(SJ ~ 1 + Life_Sat + Subjective_SES + Gender + Age + wave+
+                     (1 + Subjective_SES|ID), 
+               data = FULLDATA_LONG, REML = F, control = lmerControl(optimizer = "bobyqa"))
+tab_model(Path_C)
+
+mediate1 <- mediation::mediate(Path_A, Path_C,
+                   treat = "Subjective_SES", mediator = "Life_Sat",
+                   sims = 5000, dropobs = TRUE)
+summary(mediate1)
+
+library(flexplot)
+## Visualize effects
+visualize(Path_C, plot = "model",
+          formula = SJ ~ Subjective_SES + ID |
+                  Life_Sat,
+          sample = 339, raw.data = F)
+
+ flexplot(SJ ~ Subjective_SES + Life_Sat,
+         data = FULLDATA_LONG, se = F, method = "lm", raw.data = F)
+ 
+ mediate_plot(SJ ~ Life_Sat + Subjective_SES, 
+              data = FULLDATA_LONG)
+```
+
+Bidirectional mediation (SJ -> LS -> Subjective SES)
+```{r}
+null_model <- lmer(Life_Sat ~ 1 + (1|ID), data = FULLDATA_LONG, REML = F, control = lmerControl(optimizer = "bobyqa"))
+tab_model(null_model)
+
+Path_D <- lmer(Life_Sat ~ 1 + SJ + Gender + 
+                     Age + wave + (1 + SJ|ID), 
+               data = FULLDATA_LONG, REML = F, control = lmerControl(optimizer = "bobyqa"))
+tab_model(Path_D)
+
+Path_E <- lmer(Subjective_SES ~ 1 + Life_Sat + Gender + Age + wave + (1|ID), data = FULLDATA_LONG, 
+               REML = F, control = lmerControl(optimizer = "bobyqa"))
+
+tab_model(Path_E)
+
+Path_F <- lmer(Subjective_SES ~ 1 + Life_Sat + SJ + Gender + Age + wave +
+                     (1 + SJ|ID), 
+               data = FULLDATA_LONG, REML = F, control = lmerControl(optimizer = "bobyqa"))
+tab_model(Path_F)
+
+mediate2 <- mediation::mediate(Path_D, Path_F,
+                   treat = "SJ", mediator = "Life_Sat",
+                   sims = 5000, dropobs = TRUE)
+summary(mediate2)
+
+## Visualize effects
+visualize(Path_F, plot = "model",
+          formula = Subjective_SES ~ SJ + ID |
+                  Life_Sat,
+          sample = 339, raw.data = F)
+
+ flexplot(Subjective_SES ~ SJ + Life_Sat,
+         data = FULLDATA_LONG, se = F, method = "lm", raw.data = F)
+ 
+ mediate_plot(Subjective_SES ~ Life_Sat + SJ, 
+              data = FULLDATA_LONG)
+```
